@@ -106,6 +106,7 @@ function startLoopWatch() {
 // is supposed to mean: "YouTube's chrome has had its four seconds and gone".
 // Accumulated, so a video shorter than the timeout still arms across loops.
 var playedMs = 0;
+var audioArmed = false;
 var armWatch = null;
 function startArmWatch() {
   if (armWatch) return;
@@ -115,6 +116,14 @@ function startArmWatch() {
     last = now;
     try {
       if (player.getPlayerState() === YT.PlayerState.PLAYING) playedMs += dt;
+      // Do the audio switch EARLY, while still hidden: unMute() summons the
+      // chrome, so it has to happen with enough warm-up left for that chrome to
+      // time out again. Volume stays at 0, so nothing is audible until the card
+      // is really on screen — the visible moment then only raises the volume.
+      if (!audioArmed && playedMs > 400) {
+        audioArmed = true;
+        try { player.unMute(); player.setVolume(0); } catch (err) {}
+      }
     } catch (e) { return; }
     if (playedMs < CHROME_HIDE_MS) return;
     clearInterval(armWatch); armWatch = null;
@@ -127,15 +136,15 @@ function startArmWatch() {
 // Legal only once armed — before that, a seek would summon the chrome we hid.
 function startNow() {
   try {
-    // allowSeekAhead=false, for the same reason the loop uses it: a seek that
-    // asks the player to fetch puts it through a buffering state, and that is
-    // what makes YouTube repaint its header and pause button. By now the video
-    // has played its warm-up seconds, so frame 0 is already buffered and this
-    // rewind is silent. Passing true here is what put the pause button back on
-    // screen every time a card was swiped in.
+    // Everything noisy already happened while this card was hidden. Measured:
+    // showing the player changes nothing on its own, but unMute() and
+    // playVideo() make YouTube repaint its header and pause button — which is
+    // why they are done during the warm-up, not here. All that is left for the
+    // visible moment is a volume change (silent, no UI) and an in-buffer
+    // rewind (proven silent by the loop).
     player.seekTo(0, false);
-    if (WANT_SOUND) { player.unMute(); player.setVolume(100); muted = false; }
-    player.playVideo();
+    if (WANT_SOUND) { player.setVolume(100); muted = false; }
+    if (player.getPlayerState() !== YT.PlayerState.PLAYING) player.playVideo();
   } catch (e) {}
   startLoopWatch();
   revealVideo();
