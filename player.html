@@ -7,18 +7,15 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   #player, iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-  /* Swallows every tap so YouTube's own play/pause/seek UI can never be
-     reached. The video is presented like native inline media: it just plays. */
-  #shield { position: absolute; inset: 0; z-index: 4; background: transparent; -webkit-tap-highlight-color: transparent; }
-  /* YouTube paints its own chrome — big play button, control bar — for the
-     moment between iframe creation and first frame. Covering the player with
-     the video's own still frame until playback starts means that flash is
-     never visible; the cover then fades into the running video. */
+  /* The video's own still frame. The whole warm-up happens behind it, so the
+     chrome YouTube paints while loading is never seen. */
   #cover {
     position: absolute; inset: 0; z-index: 3; background: #000 center/cover no-repeat;
-    transition: opacity .28s ease; opacity: 1;
+    transition: opacity .25s ease; opacity: 1;
   }
   #cover.gone { opacity: 0; pointer-events: none; }
+  /* Swallows taps, so YouTube's own pause/seek UI can never be reached. */
+  #shield { position: absolute; inset: 0; z-index: 4; background: transparent; -webkit-tap-highlight-color: transparent; }
   #msg {
     position: absolute; inset: 0; display: none; place-items: center; padding: 24px; z-index: 5;
     color: rgba(255,255,255,0.75); font: 13px/1.5 -apple-system, system-ui, sans-serif; text-align: center;
@@ -36,70 +33,71 @@
 // Why this page exists: iOS reserves the https scheme, so a Capacitor app is
 // always served from capacitor://localhost. WKWebView sends no Referer for a
 // custom scheme, and YouTube refuses to embed without one — error 153,
-// "embedder identity missing referrer". Loading the player from this page
-// instead gives the YouTube iframe a real https referrer, which it accepts.
+// "embedder identity missing referrer". Loading the player from this page,
+// served over real https, gives the YouTube iframe a referrer it accepts.
 //
-// Sound is ON from the first frame. That is normally forbidden — browsers
-// block audible autoplay — but the host app's WKWebView is configured with
-// mediaTypesRequiringUserActionForPlayback: "none", which lifts the rule
-// inside the app. Safari will still block it, so if playback does not start
-// we fall back to muted and unmute on the first tap; the video always plays.
+// ─── What was measured about YouTube's chrome ─────────────────────────────
+//   • it appears while the embed loads, with or without any API call of ours
+//   • controls=0 does not suppress it; a desktop user agent does not either
+//   • it times out on its own ~4s after playback starts
+//   • pause/resume brings it back — but a seek DURING playback does not
+//   • a playlist (the usual way to loop) is what adds the skip buttons
 //
-// No controls, no speaker button: the card shows video the way native inline
-// media behaves — it plays, and the app's own UI stays in charge.
+// So: the player warms up MUTED behind the still frame while its card is still
+// off screen. Once the chrome has timed out the page marks itself "armed" and
+// waits. When the app says the card is on screen, one step rewinds to frame
+// zero, turns sound on and uncovers — instant, from the beginning, nothing but
+// video on screen. Looping rewinds just BEFORE the end, never after it.
 
-var params   = new URLSearchParams(location.search);
-var VIDEO_ID = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
-var startMuted = params.get('mute') === '1';   // default: try WITH sound
-// How long YouTube's own chrome stays on screen after playback starts. Its
-// auto-hide is ~3s; we wait slightly longer, then rewind and reveal.
+var params     = new URLSearchParams(location.search);
+var VIDEO_ID   = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
+var WANT_SOUND = params.get('mute') !== '1';
 var CHROME_HIDE_MS = parseInt(params.get('warm') || '4200', 10);
-// loop=0 drops the playlist trick. A playlist gives the embed a prev/next
-// context, which is what puts skip buttons on screen — so looping this way
-// costs us the clean look. With loop=0 we re-run the video ourselves.
-// Default OFF. A playlist is the only way to get YouTube's own loop, but it
-// also gives the embed a prev/next context and paints skip buttons over the
-// video (measured side by side). We loop ourselves instead.
-var useLoop = params.get('loop') === '1';
 
-var shield = document.getElementById('shield');
 var cover  = document.getElementById('cover');
+var shield = document.getElementById('shield');
 var msgEl  = document.getElementById('msg');
-var player = null;
-var muted  = startMuted;
-var armed  = false;      // chrome has timed out; a seek is now invisible
-var startRequested = false;
 
-// The still frame. "oar" is the original-aspect thumbnail YouTube generates for
-// non-16:9 videos, i.e. the true vertical frame of a Short; hqdefault is the
-// 16:9 fallback for everything else.
+var player = null;
+var muted  = true;            // the player is ALWAYS created muted
+var armed  = false;           // chrome gone; a seek is now invisible
+var startRequested = false;   // app asked to start before we were armed
+var loopTimer = null;
+
 if (VIDEO_ID) {
+  // "oar" is the original-aspect thumbnail YouTube generates for non-16:9
+  // videos — the true vertical frame of a Short. hqdefault is the fallback.
   cover.style.backgroundImage =
     "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/oardefault.jpg), " +
     "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/hqdefault.jpg)";
 }
-// Loop by rewinding a moment BEFORE the end, while the video is still
-// playing. Waiting for the ENDED event instead means YouTube has already put
-// its end screen up, and restarting from there both stalls and re-summons the
-// chrome — a seek during playback does neither.
-var loopTimer = null;
+
+function toParent(event, extra) {
+  try {
+    parent.postMessage(Object.assign({ source: 'byway-player', event: event }, extra || {}), '*');
+  } catch (e) { /* standalone */ }
+}
+function showMessage(text) { msgEl.textContent = text; msgEl.style.display = 'grid'; }
+function revealVideo() { cover.classList.add('gone'); }
+
+// Loop by rewinding a moment BEFORE the end, while the video is still playing.
+// Waiting for ENDED means YouTube has already put its end screen up, and
+// restarting from there both stalls and re-summons the chrome.
 function startLoopWatch() {
-  if (loopTimer || useLoop) return;
+  if (loopTimer) return;
   loopTimer = setInterval(function () {
     try {
-      var d = player.getDuration();
-      var t = player.getCurrentTime();
+      var d = player.getDuration(), t = player.getCurrentTime();
       if (d > 1 && t >= d - 0.35) player.seekTo(0, true);
     } catch (e) {}
   }, 250);
 }
 
-// Instant start: rewind to frame one, turn sound on, uncover. Only legal once
-// armed — before that a seek would summon the chrome we just hid.
+// Legal only once armed — before that, a seek would summon the chrome we hid.
 function startNow() {
   try {
     player.seekTo(0, true);
-    if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
+    if (WANT_SOUND) { player.unMute(); player.setVolume(100); muted = false; }
     player.playVideo();
   } catch (e) {}
   startLoopWatch();
@@ -107,27 +105,13 @@ function startNow() {
   toParent('playing', { muted: muted });
 }
 
-function revealVideo() {
-  if (!cover.classList.contains('gone')) cover.classList.add('gone');
-}
-
-function toParent(event, extra) {
-  try {
-    parent.postMessage(Object.assign({ source: 'byway-player', event: event }, extra || {}), '*');
-  } catch (e) { /* standalone — page still works */ }
-}
-function showMessage(text) {
-  msgEl.textContent = text;
-  msgEl.style.display = 'grid';
-}
 function setMuted(next) {
   if (!player) return;
   try {
-    if (next) { player.mute(); }
-    else      { player.unMute(); player.setVolume(100); }
+    if (next) player.mute(); else { player.unMute(); player.setVolume(100); }
     muted = next;
     toParent('sound', { muted: muted });
-  } catch (e) { /* player not ready yet */ }
+  } catch (e) {}
 }
 
 if (!VIDEO_ID) showMessage('No video requested.');
@@ -138,69 +122,33 @@ window.onYouTubeIframeAPIReady = function () {
     videoId: VIDEO_ID,
     playerVars: {
       autoplay: 1,
-      // ALWAYS start muted, whatever we intend to do later. A player created
-      // unmuted begins with sound before any API call of ours can land — which
-      // is exactly how the pre-warmed next card was audible over the card the
-      // user was actually watching. Sound is turned on in startNow(), never here.
+      // ALWAYS muted at creation. A player created unmuted starts with sound
+      // before any call of ours can land — which is exactly how a pre-warmed
+      // card was audible over the card being watched. Sound is turned on in
+      // startNow(), never here.
       mute: 1,
-      playsinline: 1,              // stay inline, never iOS fullscreen
-      controls: 0,                 // no scrubber, no play/pause
-      disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
-      iv_load_policy: 3,           // no annotation overlays
-      loop: useLoop ? 1 : 0,
-      playlist: useLoop ? VIDEO_ID : undefined
+      playsinline: 1,      // stay inline, never iOS fullscreen
+      controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
+      iv_load_policy: 3    // no annotation overlays
+      // deliberately NO loop/playlist: a playlist is what adds skip buttons
     },
     events: {
       onReady: function (e) {
-        // raw=1: touch nothing. Testing whether YouTube's chrome is triggered
-        // by autoplay itself or by our own mute()/playVideo() calls, which the
-        // player may treat as interaction.
-        if (params.get('raw') === '1') { revealVideo(); toParent('ready'); return; }
-        // YouTube paints its own chrome — channel header and a pause button —
-        // for the first seconds of playback. controls=0 does not stop it: the
-        // embed of a Short renders YouTube's Shorts UI, and a desktop user
-        // agent does not change that either (both measured). It DOES time out
-        // on its own, so the video plays muted behind its still frame until it
-        // has gone, and only then do we unmute and uncover. Rewinding at that
-        // point is not an option — a seek makes the chrome reappear.
-        e.target.playVideo();
+        e.target.playVideo();          // warm up, muted, behind the cover
         toParent('ready');
         setTimeout(function () {
-          try {
-            // rewind=1: jump back to frame 0 at reveal time. Whether this is
-            // usable depends on one measured fact — does a seek AFTER the
-            // chrome has timed out bring it back, or stay clean?
-            if (params.get('rewind') === '1') player.seekTo(0, true);
-            if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
-            player.playVideo();
-            revealVideo();
-            toParent('playing', { muted: muted });
-          } catch (err) { revealVideo(); }
+          armed = true;
+          try { player.seekTo(0, true); } catch (err) {}   // invisible now
+          toParent('armed');
+          if (startRequested) startNow();
         }, CHROME_HIDE_MS);
-        // Audible autoplay is a privilege, not a guarantee. If nothing is
-        // playing shortly after, the policy blocked us — drop to muted so the
-        // user at least sees the video, and let the first tap bring sound.
-        setTimeout(function () {
-          try {
-            if (player.getPlayerState() !== YT.PlayerState.PLAYING) {
-              player.mute(); muted = true; player.playVideo();
-              toParent('sound', { muted: true, reason: 'autoplay-policy' });
-            }
-          } catch (err) {}
-        }, 1600);
-        // No blind reveal timer here: the still frame is meant to stay until
-        // the app says this card is on screen. Standalone use (no parent) is
-        // covered below.
-        if (window.parent === window) setTimeout(startNow, CHROME_HIDE_MS + 200);
+        // Standalone (opened directly, no app around it): just play.
+        if (window.parent === window) setTimeout(startNow, CHROME_HIDE_MS + 150);
       },
       onStateChange: function (e) {
-        // Uncover only once frames are actually running, so the chrome YouTube
-        // paints while it spins up stays hidden behind the still.
-        // Reveal is driven by the warm-up timer above, not by this event —
-        // PLAYING fires while the chrome is still on screen.
         if (e.data === YT.PlayerState.PLAYING) toParent('state-playing', { muted: muted });
-        // Backstop only — the real loop happens just BEFORE the end, below.
-        if (!useLoop && e.data === YT.PlayerState.ENDED) {
+        // Backstop: the pre-emptive rewind should mean we never get here.
+        if (e.data === YT.PlayerState.ENDED) {
           try { player.seekTo(0, true); player.playVideo(); } catch (err) {}
         }
       },
@@ -213,27 +161,22 @@ window.onYouTubeIframeAPIReady = function () {
   });
 };
 
-// The shield eats taps meant for YouTube's UI. Its one job beyond that: if we
-// ended up muted, the tap that lands here is a real gesture in THIS frame —
-// the only kind that can legally turn sound on.
+// The shield eats taps meant for YouTube's UI. Its one other job: if sound was
+// blocked, the tap landing here is a real gesture in THIS frame — the only kind
+// allowed to turn audio on.
 shield.addEventListener('click', function (ev) {
   ev.stopPropagation();
-  if (muted) setMuted(false);
+  if (muted && WANT_SOUND && armed) setMuted(false);
 });
 
-// The app pauses us when the card is swiped away, so audio never outlives it.
 window.addEventListener('message', function (ev) {
   var d = ev.data;
   if (!d || d.target !== 'byway-player' || !player) return;
-  if (d.action === 'pause') { try { player.pauseVideo(); } catch (e) {} }
-  if (d.action === 'play')  { try { player.playVideo(); } catch (e) {} }
-  if (d.action === 'mute')  { setMuted(true); }
-  // The card became the top card. Play from frame one right now if the chrome
-  // has already timed out; otherwise remember and fire the moment it has.
-  if (d.action === 'start') {
-    if (armed) startNow(); else startRequested = true;
-  }
-  if (d.action === 'unmute'){ setMuted(false); }
+  if (d.action === 'start')  { if (armed) startNow(); else startRequested = true; }
+  if (d.action === 'pause')  { try { player.pauseVideo(); } catch (e) {} }
+  if (d.action === 'play')   { try { player.playVideo(); } catch (e) {} }
+  if (d.action === 'mute')   { setMuted(true); }
+  if (d.action === 'unmute') { setMuted(false); }
 });
 
 var s = document.createElement('script');
