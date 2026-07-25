@@ -122,7 +122,11 @@ function startArmWatch() {
       // is really on screen — the visible moment then only raises the volume.
       if (!audioArmed && playedMs > 400) {
         audioArmed = true;
-        try { player.unMute(); player.setVolume(0); } catch (err) {}
+        // Order matters: unMute() restores the volume the player had before it
+        // was muted — 100 — so unmuting first makes the hidden card audible for
+        // the gap until setVolume lands. That gap is exactly what was heard
+        // over the card being watched. Volume to zero FIRST, then unmute.
+        try { player.setVolume(0); player.unMute(); player.setVolume(0); } catch (err) {}
       }
     } catch (e) { return; }
     if (playedMs < CHROME_HIDE_MS) return;
