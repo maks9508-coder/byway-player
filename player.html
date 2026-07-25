@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ByWay Short player</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #player, iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #sound {
+    position: absolute; left: 12px; bottom: 12px; z-index: 5;
+    width: 44px; height: 44px; border: 0; border-radius: 50%;
+    background: rgba(0,0,0,0.55); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    color: #fff; font-size: 18px; line-height: 1; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #msg {
+    position: absolute; inset: 0; display: none; place-items: center; padding: 24px;
+    color: rgba(255,255,255,0.75); font: 13px/1.5 -apple-system, system-ui, sans-serif;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="player"></div>
+<button id="sound" aria-label="Turn sound on">🔇</button>
+<div id="msg"></div>
+<script>
+// ByWay Short player shim.
+//
+// Why this page exists: iOS reserves the https scheme, so a Capacitor app is
+// always served from capacitor://localhost. WKWebView sends no Referer for a
+// custom scheme, and YouTube refuses to embed without one — error 153,
+// "embedder identity missing referrer". Loading the player from this page
+// instead gives the YouTube iframe a real https referrer, which it accepts.
+//
+// The speaker button lives HERE, not in the app: browsers grant audio
+// permission to the frame the user actually tapped, and a tap in the parent
+// document does not activate a cross-origin child frame.
+
+var params    = new URLSearchParams(location.search);
+var VIDEO_ID  = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
+var startMuted = params.get('mute') !== '0';
+
+var soundBtn = document.getElementById('sound');
+var msgEl    = document.getElementById('msg');
+var player   = null;
+var muted    = true;
+
+function toParent(event, extra) {
+  try {
+    parent.postMessage(Object.assign({ source: 'byway-player', event: event }, extra || {}), '*');
+  } catch (e) { /* no parent, or blocked — the page still works standalone */ }
+}
+function showMessage(text) {
+  msgEl.textContent = text;
+  msgEl.style.display = 'grid';
+  soundBtn.style.display = 'none';
+}
+
+if (!VIDEO_ID) showMessage('No video requested.');
+
+window.onYouTubeIframeAPIReady = function () {
+  if (!VIDEO_ID) return;
+  player = new YT.Player('player', {
+    videoId: VIDEO_ID,
+    playerVars: {
+      autoplay: 1,
+      mute: startMuted ? 1 : 0,   // audible autoplay is blocked everywhere
+      playsinline: 1,             // stay inside the card, no iOS fullscreen
+      controls: 0, rel: 0, modestbranding: 1, fs: 0, disablekb: 1,
+      loop: 1, playlist: VIDEO_ID // playlist=self is what makes loop work
+    },
+    events: {
+      onReady: function (e) { e.target.playVideo(); toParent('ready'); },
+      onStateChange: function (e) { if (e.data === 1) toParent('playing'); },
+      onError: function (e) {
+        showMessage('Video unavailable (code ' + e.data + ')');
+        toParent('error', { code: e.data });
+      }
+    }
+  });
+};
+
+soundBtn.addEventListener('click', function (ev) {
+  ev.stopPropagation();
+  if (!player) return;
+  if (muted) { player.unMute(); player.setVolume(100); muted = false; soundBtn.textContent = '🔊'; soundBtn.setAttribute('aria-label', 'Mute'); }
+  else       { player.mute();   muted = true;  soundBtn.textContent = '🔇'; soundBtn.setAttribute('aria-label', 'Turn sound on'); }
+  player.playVideo();
+  toParent('sound', { muted: muted });
+});
+
+// The app may ask us to stop (card swiped away) so audio never outlives the card.
+window.addEventListener('message', function (ev) {
+  var d = ev.data;
+  if (!d || d.target !== 'byway-player' || !player) return;
+  if (d.action === 'pause') { try { player.pauseVideo(); } catch (e) {} }
+  if (d.action === 'play')  { try { player.playVideo(); } catch (e) {} }
+  if (d.action === 'mute')  { try { player.mute(); muted = true; soundBtn.textContent = '🔇'; } catch (e) {} }
+});
+
+var s = document.createElement('script');
+s.src = 'https://www.youtube.com/iframe_api';
+s.onerror = function () { showMessage('Could not load the YouTube player.'); toParent('error', { code: 'api' }); };
+document.head.appendChild(s);
+</script>
+</body>
+</html>
