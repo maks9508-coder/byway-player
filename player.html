@@ -51,6 +51,9 @@
 var params   = new URLSearchParams(location.search);
 var VIDEO_ID = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
 var startMuted = params.get('mute') === '1';   // default: try WITH sound
+// How long YouTube's own chrome stays on screen after playback starts. Its
+// auto-hide is ~3s; we wait slightly longer, then rewind and reveal.
+var CHROME_HIDE_MS = parseInt(params.get('warm') || '3400', 10);
 
 var shield = document.getElementById('shield');
 var cover  = document.getElementById('cover');
@@ -106,9 +109,23 @@ window.onYouTubeIframeAPIReady = function () {
     },
     events: {
       onReady: function (e) {
-        if (!startMuted) { try { e.target.unMute(); e.target.setVolume(100); } catch (err) {} }
+        // YouTube paints its own chrome — channel header, pause, skip buttons —
+        // for the first few seconds of playback, and controls=0 does not stop
+        // it on the mobile embed. So the video starts MUTED behind the still
+        // frame, we let that chrome time out unseen, then rewind to 0, turn
+        // sound on and uncover. The viewer gets a clean start from frame one.
+        try { e.target.mute(); } catch (err) {}
         e.target.playVideo();
         toParent('ready');
+        setTimeout(function () {
+          try {
+            player.seekTo(0, true);
+            if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
+            player.playVideo();
+            revealVideo();
+            toParent('playing', { muted: muted });
+          } catch (err) { revealVideo(); }
+        }, CHROME_HIDE_MS);
         // Audible autoplay is a privilege, not a guarantee. If nothing is
         // playing shortly after, the policy blocked us — drop to muted so the
         // user at least sees the video, and let the first tap bring sound.
@@ -123,12 +140,14 @@ window.onYouTubeIframeAPIReady = function () {
         // Safety: never let the still frame outlive the player. If PLAYING
         // somehow never fires, show whatever the player is doing rather than
         // a frozen image.
-        setTimeout(revealVideo, 4000);
+        setTimeout(revealVideo, CHROME_HIDE_MS + 2500);
       },
       onStateChange: function (e) {
         // Uncover only once frames are actually running, so the chrome YouTube
         // paints while it spins up stays hidden behind the still.
-        if (e.data === YT.PlayerState.PLAYING) { revealVideo(); toParent('playing', { muted: muted }); }
+        // Reveal is driven by the warm-up timer above, not by this event —
+        // PLAYING fires while the chrome is still on screen.
+        if (e.data === YT.PlayerState.PLAYING) toParent('state-playing', { muted: muted });
       },
       onError: function (e) {
         revealVideo();
