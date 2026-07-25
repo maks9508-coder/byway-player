@@ -10,6 +10,15 @@
   /* Swallows every tap so YouTube's own play/pause/seek UI can never be
      reached. The video is presented like native inline media: it just plays. */
   #shield { position: absolute; inset: 0; z-index: 4; background: transparent; -webkit-tap-highlight-color: transparent; }
+  /* YouTube paints its own chrome — big play button, control bar — for the
+     moment between iframe creation and first frame. Covering the player with
+     the video's own still frame until playback starts means that flash is
+     never visible; the cover then fades into the running video. */
+  #cover {
+    position: absolute; inset: 0; z-index: 3; background: #000 center/cover no-repeat;
+    transition: opacity .28s ease; opacity: 1;
+  }
+  #cover.gone { opacity: 0; pointer-events: none; }
   #msg {
     position: absolute; inset: 0; display: none; place-items: center; padding: 24px; z-index: 5;
     color: rgba(255,255,255,0.75); font: 13px/1.5 -apple-system, system-ui, sans-serif; text-align: center;
@@ -18,6 +27,7 @@
 </head>
 <body>
 <div id="player"></div>
+<div id="cover"></div>
 <div id="shield"></div>
 <div id="msg"></div>
 <script>
@@ -43,9 +53,22 @@ var VIDEO_ID = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
 var startMuted = params.get('mute') === '1';   // default: try WITH sound
 
 var shield = document.getElementById('shield');
+var cover  = document.getElementById('cover');
 var msgEl  = document.getElementById('msg');
 var player = null;
 var muted  = startMuted;
+
+// The still frame. "oar" is the original-aspect thumbnail YouTube generates for
+// non-16:9 videos, i.e. the true vertical frame of a Short; hqdefault is the
+// 16:9 fallback for everything else.
+if (VIDEO_ID) {
+  cover.style.backgroundImage =
+    "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/oardefault.jpg), " +
+    "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/hqdefault.jpg)";
+}
+function revealVideo() {
+  if (!cover.classList.contains('gone')) cover.classList.add('gone');
+}
 
 function toParent(event, extra) {
   try {
@@ -97,11 +120,18 @@ window.onYouTubeIframeAPIReady = function () {
             }
           } catch (err) {}
         }, 1600);
+        // Safety: never let the still frame outlive the player. If PLAYING
+        // somehow never fires, show whatever the player is doing rather than
+        // a frozen image.
+        setTimeout(revealVideo, 4000);
       },
       onStateChange: function (e) {
-        if (e.data === YT.PlayerState.PLAYING) toParent('playing', { muted: muted });
+        // Uncover only once frames are actually running, so the chrome YouTube
+        // paints while it spins up stays hidden behind the still.
+        if (e.data === YT.PlayerState.PLAYING) { revealVideo(); toParent('playing', { muted: muted }); }
       },
       onError: function (e) {
+        revealVideo();
         showMessage('Video unavailable (code ' + e.data + ')');
         toParent('error', { code: e.data });
       }
