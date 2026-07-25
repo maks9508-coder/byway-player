@@ -151,6 +151,9 @@ function setMuted(next) {
   } catch (e) {}
 }
 
+// nocover=1 — diagnostic only: drop the still frame immediately so a probe can
+// see exactly what the player is doing underneath it.
+if (params.get('nocover') === '1') revealVideo();
 if (!VIDEO_ID) showMessage('No video requested.');
 
 window.onYouTubeIframeAPIReady = function () {
