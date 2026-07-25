@@ -7,23 +7,18 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   #player, iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-  #sound {
-    position: absolute; left: 12px; bottom: 12px; z-index: 5;
-    width: 44px; height: 44px; border: 0; border-radius: 50%;
-    background: rgba(0,0,0,0.55); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-    color: #fff; font-size: 18px; line-height: 1; cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
+  /* Swallows every tap so YouTube's own play/pause/seek UI can never be
+     reached. The video is presented like native inline media: it just plays. */
+  #shield { position: absolute; inset: 0; z-index: 4; background: transparent; -webkit-tap-highlight-color: transparent; }
   #msg {
-    position: absolute; inset: 0; display: none; place-items: center; padding: 24px;
-    color: rgba(255,255,255,0.75); font: 13px/1.5 -apple-system, system-ui, sans-serif;
-    text-align: center;
+    position: absolute; inset: 0; display: none; place-items: center; padding: 24px; z-index: 5;
+    color: rgba(255,255,255,0.75); font: 13px/1.5 -apple-system, system-ui, sans-serif; text-align: center;
   }
 </style>
 </head>
 <body>
 <div id="player"></div>
-<button id="sound" aria-label="Turn sound on">🔇</button>
+<div id="shield"></div>
 <div id="msg"></div>
 <script>
 // ByWay Short player shim.
@@ -34,28 +29,41 @@
 // "embedder identity missing referrer". Loading the player from this page
 // instead gives the YouTube iframe a real https referrer, which it accepts.
 //
-// The speaker button lives HERE, not in the app: browsers grant audio
-// permission to the frame the user actually tapped, and a tap in the parent
-// document does not activate a cross-origin child frame.
+// Sound is ON from the first frame. That is normally forbidden — browsers
+// block audible autoplay — but the host app's WKWebView is configured with
+// mediaTypesRequiringUserActionForPlayback: "none", which lifts the rule
+// inside the app. Safari will still block it, so if playback does not start
+// we fall back to muted and unmute on the first tap; the video always plays.
+//
+// No controls, no speaker button: the card shows video the way native inline
+// media behaves — it plays, and the app's own UI stays in charge.
 
-var params    = new URLSearchParams(location.search);
-var VIDEO_ID  = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
-var startMuted = params.get('mute') !== '0';
+var params   = new URLSearchParams(location.search);
+var VIDEO_ID = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
+var startMuted = params.get('mute') === '1';   // default: try WITH sound
 
-var soundBtn = document.getElementById('sound');
-var msgEl    = document.getElementById('msg');
-var player   = null;
-var muted    = true;
+var shield = document.getElementById('shield');
+var msgEl  = document.getElementById('msg');
+var player = null;
+var muted  = startMuted;
 
 function toParent(event, extra) {
   try {
     parent.postMessage(Object.assign({ source: 'byway-player', event: event }, extra || {}), '*');
-  } catch (e) { /* no parent, or blocked — the page still works standalone */ }
+  } catch (e) { /* standalone — page still works */ }
 }
 function showMessage(text) {
   msgEl.textContent = text;
   msgEl.style.display = 'grid';
-  soundBtn.style.display = 'none';
+}
+function setMuted(next) {
+  if (!player) return;
+  try {
+    if (next) { player.mute(); }
+    else      { player.unMute(); player.setVolume(100); }
+    muted = next;
+    toParent('sound', { muted: muted });
+  } catch (e) { /* player not ready yet */ }
 }
 
 if (!VIDEO_ID) showMessage('No video requested.');
@@ -66,14 +74,33 @@ window.onYouTubeIframeAPIReady = function () {
     videoId: VIDEO_ID,
     playerVars: {
       autoplay: 1,
-      mute: startMuted ? 1 : 0,   // audible autoplay is blocked everywhere
-      playsinline: 1,             // stay inside the card, no iOS fullscreen
-      controls: 0, rel: 0, modestbranding: 1, fs: 0, disablekb: 1,
-      loop: 1, playlist: VIDEO_ID // playlist=self is what makes loop work
+      mute: startMuted ? 1 : 0,
+      playsinline: 1,              // stay inline, never iOS fullscreen
+      controls: 0,                 // no scrubber, no play/pause
+      disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
+      iv_load_policy: 3,           // no annotation overlays
+      loop: 1, playlist: VIDEO_ID  // playlist=self is what makes loop work
     },
     events: {
-      onReady: function (e) { e.target.playVideo(); toParent('ready'); },
-      onStateChange: function (e) { if (e.data === 1) toParent('playing'); },
+      onReady: function (e) {
+        if (!startMuted) { try { e.target.unMute(); e.target.setVolume(100); } catch (err) {} }
+        e.target.playVideo();
+        toParent('ready');
+        // Audible autoplay is a privilege, not a guarantee. If nothing is
+        // playing shortly after, the policy blocked us — drop to muted so the
+        // user at least sees the video, and let the first tap bring sound.
+        setTimeout(function () {
+          try {
+            if (player.getPlayerState() !== YT.PlayerState.PLAYING) {
+              player.mute(); muted = true; player.playVideo();
+              toParent('sound', { muted: true, reason: 'autoplay-policy' });
+            }
+          } catch (err) {}
+        }, 1600);
+      },
+      onStateChange: function (e) {
+        if (e.data === YT.PlayerState.PLAYING) toParent('playing', { muted: muted });
+      },
       onError: function (e) {
         showMessage('Video unavailable (code ' + e.data + ')');
         toParent('error', { code: e.data });
@@ -82,22 +109,22 @@ window.onYouTubeIframeAPIReady = function () {
   });
 };
 
-soundBtn.addEventListener('click', function (ev) {
+// The shield eats taps meant for YouTube's UI. Its one job beyond that: if we
+// ended up muted, the tap that lands here is a real gesture in THIS frame —
+// the only kind that can legally turn sound on.
+shield.addEventListener('click', function (ev) {
   ev.stopPropagation();
-  if (!player) return;
-  if (muted) { player.unMute(); player.setVolume(100); muted = false; soundBtn.textContent = '🔊'; soundBtn.setAttribute('aria-label', 'Mute'); }
-  else       { player.mute();   muted = true;  soundBtn.textContent = '🔇'; soundBtn.setAttribute('aria-label', 'Turn sound on'); }
-  player.playVideo();
-  toParent('sound', { muted: muted });
+  if (muted) setMuted(false);
 });
 
-// The app may ask us to stop (card swiped away) so audio never outlives the card.
+// The app pauses us when the card is swiped away, so audio never outlives it.
 window.addEventListener('message', function (ev) {
   var d = ev.data;
   if (!d || d.target !== 'byway-player' || !player) return;
   if (d.action === 'pause') { try { player.pauseVideo(); } catch (e) {} }
   if (d.action === 'play')  { try { player.playVideo(); } catch (e) {} }
-  if (d.action === 'mute')  { try { player.mute(); muted = true; soundBtn.textContent = '🔇'; } catch (e) {} }
+  if (d.action === 'mute')  { setMuted(true); }
+  if (d.action === 'unmute'){ setMuted(false); }
 });
 
 var s = document.createElement('script');
