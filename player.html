@@ -78,6 +78,22 @@ if (VIDEO_ID) {
     "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/oardefault.jpg), " +
     "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/hqdefault.jpg)";
 }
+// Loop by rewinding a moment BEFORE the end, while the video is still
+// playing. Waiting for the ENDED event instead means YouTube has already put
+// its end screen up, and restarting from there both stalls and re-summons the
+// chrome — a seek during playback does neither.
+var loopTimer = null;
+function startLoopWatch() {
+  if (loopTimer || useLoop) return;
+  loopTimer = setInterval(function () {
+    try {
+      var d = player.getDuration();
+      var t = player.getCurrentTime();
+      if (d > 1 && t >= d - 0.35) player.seekTo(0, true);
+    } catch (e) {}
+  }, 250);
+}
+
 // Instant start: rewind to frame one, turn sound on, uncover. Only legal once
 // armed — before that a seek would summon the chrome we just hid.
 function startNow() {
@@ -86,6 +102,7 @@ function startNow() {
     if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
     player.playVideo();
   } catch (e) {}
+  startLoopWatch();
   revealVideo();
   toParent('playing', { muted: muted });
 }
@@ -121,7 +138,11 @@ window.onYouTubeIframeAPIReady = function () {
     videoId: VIDEO_ID,
     playerVars: {
       autoplay: 1,
-      mute: startMuted ? 1 : 0,
+      // ALWAYS start muted, whatever we intend to do later. A player created
+      // unmuted begins with sound before any API call of ours can land — which
+      // is exactly how the pre-warmed next card was audible over the card the
+      // user was actually watching. Sound is turned on in startNow(), never here.
+      mute: 1,
       playsinline: 1,              // stay inline, never iOS fullscreen
       controls: 0,                 // no scrubber, no play/pause
       disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
@@ -142,7 +163,6 @@ window.onYouTubeIframeAPIReady = function () {
         // on its own, so the video plays muted behind its still frame until it
         // has gone, and only then do we unmute and uncover. Rewinding at that
         // point is not an option — a seek makes the chrome reappear.
-        try { e.target.mute(); } catch (err) {}
         e.target.playVideo();
         toParent('ready');
         setTimeout(function () {
@@ -179,7 +199,7 @@ window.onYouTubeIframeAPIReady = function () {
         // Reveal is driven by the warm-up timer above, not by this event —
         // PLAYING fires while the chrome is still on screen.
         if (e.data === YT.PlayerState.PLAYING) toParent('state-playing', { muted: muted });
-        // Self-loop when we are not using a playlist.
+        // Backstop only — the real loop happens just BEFORE the end, below.
         if (!useLoop && e.data === YT.PlayerState.ENDED) {
           try { player.seekTo(0, true); player.playVideo(); } catch (err) {}
         }
