@@ -98,6 +98,32 @@ function startLoopWatch() {
   }, 250);
 }
 
+// Arming must be driven by how much the video has ACTUALLY PLAYED, not by a
+// wall-clock timer. A pre-warmed card is off screen, and an off-screen iframe
+// gets its playback throttled — the clock ran out while nothing had played, so
+// the chrome had never even appeared yet, and it showed up over the video right
+// after the user swiped in. Counting real playback makes the wait mean what it
+// is supposed to mean: "YouTube's chrome has had its four seconds and gone".
+// Accumulated, so a video shorter than the timeout still arms across loops.
+var playedMs = 0;
+var armWatch = null;
+function startArmWatch() {
+  if (armWatch) return;
+  var last = Date.now();
+  armWatch = setInterval(function () {
+    var now = Date.now(), dt = now - last;
+    last = now;
+    try {
+      if (player.getPlayerState() === YT.PlayerState.PLAYING) playedMs += dt;
+    } catch (e) { return; }
+    if (playedMs < CHROME_HIDE_MS) return;
+    clearInterval(armWatch); armWatch = null;
+    armed = true;
+    toParent('armed');
+    if (startRequested) startNow();
+  }, 200);
+}
+
 // Legal only once armed — before that, a seek would summon the chrome we hid.
 function startNow() {
   try {
@@ -141,12 +167,7 @@ window.onYouTubeIframeAPIReady = function () {
       onReady: function (e) {
         e.target.playVideo();          // warm up, muted, behind the cover
         toParent('ready');
-        setTimeout(function () {
-          armed = true;
-          try { player.seekTo(0, true); } catch (err) {}   // invisible now
-          toParent('armed');
-          if (startRequested) startNow();
-        }, CHROME_HIDE_MS);
+        startArmWatch();
         // Standalone (opened directly, no app around it): just play.
         if (window.parent === window) setTimeout(startNow, CHROME_HIDE_MS + 150);
       },
