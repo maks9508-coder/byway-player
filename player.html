@@ -67,6 +67,8 @@ var cover  = document.getElementById('cover');
 var msgEl  = document.getElementById('msg');
 var player = null;
 var muted  = startMuted;
+var armed  = false;      // chrome has timed out; a seek is now invisible
+var startRequested = false;
 
 // The still frame. "oar" is the original-aspect thumbnail YouTube generates for
 // non-16:9 videos, i.e. the true vertical frame of a Short; hqdefault is the
@@ -76,6 +78,18 @@ if (VIDEO_ID) {
     "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/oardefault.jpg), " +
     "url(https://i.ytimg.com/vi/" + VIDEO_ID + "/hqdefault.jpg)";
 }
+// Instant start: rewind to frame one, turn sound on, uncover. Only legal once
+// armed — before that a seek would summon the chrome we just hid.
+function startNow() {
+  try {
+    player.seekTo(0, true);
+    if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
+    player.playVideo();
+  } catch (e) {}
+  revealVideo();
+  toParent('playing', { muted: muted });
+}
+
 function revealVideo() {
   if (!cover.classList.contains('gone')) cover.classList.add('gone');
 }
@@ -154,10 +168,10 @@ window.onYouTubeIframeAPIReady = function () {
             }
           } catch (err) {}
         }, 1600);
-        // Safety: never let the still frame outlive the player. If PLAYING
-        // somehow never fires, show whatever the player is doing rather than
-        // a frozen image.
-        setTimeout(revealVideo, CHROME_HIDE_MS + 2500);
+        // No blind reveal timer here: the still frame is meant to stay until
+        // the app says this card is on screen. Standalone use (no parent) is
+        // covered below.
+        if (window.parent === window) setTimeout(startNow, CHROME_HIDE_MS + 200);
       },
       onStateChange: function (e) {
         // Uncover only once frames are actually running, so the chrome YouTube
@@ -194,6 +208,11 @@ window.addEventListener('message', function (ev) {
   if (d.action === 'pause') { try { player.pauseVideo(); } catch (e) {} }
   if (d.action === 'play')  { try { player.playVideo(); } catch (e) {} }
   if (d.action === 'mute')  { setMuted(true); }
+  // The card became the top card. Play from frame one right now if the chrome
+  // has already timed out; otherwise remember and fire the moment it has.
+  if (d.action === 'start') {
+    if (armed) startNow(); else startRequested = true;
+  }
   if (d.action === 'unmute'){ setMuted(false); }
 });
 
