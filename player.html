@@ -220,6 +220,18 @@ shield.addEventListener('click', function (ev) {
 window.addEventListener('message', function (ev) {
   var d = ev.data;
   if (!d || d.target !== 'byway-player' || !player) return;
+  // Swap the clip inside the ALREADY WARM player instead of creating a new
+  // one. YouTube paints its chrome when a player is constructed; if it does not
+  // repaint on loadVideoById, one long-lived player can serve every card —
+  // instant, clean, and still the real clip for that place.
+  if (d.action === 'load' && d.videoId) {
+    var id = String(d.videoId).replace(/[^A-Za-z0-9_-]/g, '');
+    try {
+      player.loadVideoById({ videoId: id });
+      if (WANT_SOUND && !muted) player.setVolume(100);
+      toParent('loaded', { videoId: id });
+    } catch (e) {}
+  }
   if (d.action === 'start')  { if (armed) startNow(); else startRequested = true; }
   if (d.action === 'pause')  { try { player.pauseVideo(); } catch (e) {} }
   if (d.action === 'play')   { try { player.playVideo(); } catch (e) {} }
