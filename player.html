@@ -117,6 +117,10 @@ window.onYouTubeIframeAPIReady = function () {
     },
     events: {
       onReady: function (e) {
+        // raw=1: touch nothing. Testing whether YouTube's chrome is triggered
+        // by autoplay itself or by our own mute()/playVideo() calls, which the
+        // player may treat as interaction.
+        if (params.get('raw') === '1') { revealVideo(); toParent('ready'); return; }
         // YouTube paints its own chrome — channel header and a pause button —
         // for the first seconds of playback. controls=0 does not stop it: the
         // embed of a Short renders YouTube's Shorts UI, and a desktop user
