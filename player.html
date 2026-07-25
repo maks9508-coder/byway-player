@@ -53,11 +53,14 @@ var VIDEO_ID = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
 var startMuted = params.get('mute') === '1';   // default: try WITH sound
 // How long YouTube's own chrome stays on screen after playback starts. Its
 // auto-hide is ~3s; we wait slightly longer, then rewind and reveal.
-var CHROME_HIDE_MS = parseInt(params.get('warm') || '3400', 10);
+var CHROME_HIDE_MS = parseInt(params.get('warm') || '4200', 10);
 // loop=0 drops the playlist trick. A playlist gives the embed a prev/next
 // context, which is what puts skip buttons on screen — so looping this way
 // costs us the clean look. With loop=0 we re-run the video ourselves.
-var useLoop = params.get('loop') !== '0';
+// Default OFF. A playlist is the only way to get YouTube's own loop, but it
+// also gives the embed a prev/next context and paints skip buttons over the
+// video (measured side by side). We loop ourselves instead.
+var useLoop = params.get('loop') === '1';
 
 var shield = document.getElementById('shield');
 var cover  = document.getElementById('cover');
@@ -114,17 +117,18 @@ window.onYouTubeIframeAPIReady = function () {
     },
     events: {
       onReady: function (e) {
-        // YouTube paints its own chrome — channel header, pause, skip buttons —
-        // for the first few seconds of playback, and controls=0 does not stop
-        // it on the mobile embed. So the video starts MUTED behind the still
-        // frame, we let that chrome time out unseen, then rewind to 0, turn
-        // sound on and uncover. The viewer gets a clean start from frame one.
+        // YouTube paints its own chrome — channel header and a pause button —
+        // for the first seconds of playback. controls=0 does not stop it: the
+        // embed of a Short renders YouTube's Shorts UI, and a desktop user
+        // agent does not change that either (both measured). It DOES time out
+        // on its own, so the video plays muted behind its still frame until it
+        // has gone, and only then do we unmute and uncover. Rewinding at that
+        // point is not an option — a seek makes the chrome reappear.
         try { e.target.mute(); } catch (err) {}
         e.target.playVideo();
         toParent('ready');
         setTimeout(function () {
           try {
-            if (params.get('rewind') === '1') player.seekTo(0, true);
             if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
             player.playVideo();
             revealVideo();
