@@ -133,6 +133,10 @@ window.onYouTubeIframeAPIReady = function () {
         toParent('ready');
         setTimeout(function () {
           try {
+            // rewind=1: jump back to frame 0 at reveal time. Whether this is
+            // usable depends on one measured fact — does a seek AFTER the
+            // chrome has timed out bring it back, or stay clean?
+            if (params.get('rewind') === '1') player.seekTo(0, true);
             if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
             player.playVideo();
             revealVideo();
