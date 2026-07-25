@@ -54,6 +54,10 @@ var startMuted = params.get('mute') === '1';   // default: try WITH sound
 // How long YouTube's own chrome stays on screen after playback starts. Its
 // auto-hide is ~3s; we wait slightly longer, then rewind and reveal.
 var CHROME_HIDE_MS = parseInt(params.get('warm') || '3400', 10);
+// loop=0 drops the playlist trick. A playlist gives the embed a prev/next
+// context, which is what puts skip buttons on screen — so looping this way
+// costs us the clean look. With loop=0 we re-run the video ourselves.
+var useLoop = params.get('loop') !== '0';
 
 var shield = document.getElementById('shield');
 var cover  = document.getElementById('cover');
@@ -105,7 +109,8 @@ window.onYouTubeIframeAPIReady = function () {
       controls: 0,                 // no scrubber, no play/pause
       disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
       iv_load_policy: 3,           // no annotation overlays
-      loop: 1, playlist: VIDEO_ID  // playlist=self is what makes loop work
+      loop: useLoop ? 1 : 0,
+      playlist: useLoop ? VIDEO_ID : undefined
     },
     events: {
       onReady: function (e) {
@@ -119,7 +124,7 @@ window.onYouTubeIframeAPIReady = function () {
         toParent('ready');
         setTimeout(function () {
           try {
-            player.seekTo(0, true);
+            if (params.get('rewind') === '1') player.seekTo(0, true);
             if (!startMuted) { player.unMute(); player.setVolume(100); muted = false; }
             player.playVideo();
             revealVideo();
@@ -148,6 +153,10 @@ window.onYouTubeIframeAPIReady = function () {
         // Reveal is driven by the warm-up timer above, not by this event —
         // PLAYING fires while the chrome is still on screen.
         if (e.data === YT.PlayerState.PLAYING) toParent('state-playing', { muted: muted });
+        // Self-loop when we are not using a playlist.
+        if (!useLoop && e.data === YT.PlayerState.ENDED) {
+          try { player.seekTo(0, true); player.playVideo(); } catch (err) {}
+        }
       },
       onError: function (e) {
         revealVideo();
