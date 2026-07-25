@@ -88,7 +88,12 @@ function startLoopWatch() {
   loopTimer = setInterval(function () {
     try {
       var d = player.getDuration(), t = player.getCurrentTime();
-      if (d > 1 && t >= d - 0.35) player.seekTo(0, true);
+      // allowSeekAhead=false: seek only inside what is already buffered. A
+      // Short is fully buffered by the time it reaches its end, so this jumps
+      // straight to frame 0 without a new request — and without the buffering
+      // state that makes YouTube paint its chrome again. Passing true here is
+      // what made the loop point flash the header and pause button.
+      if (d > 1 && t >= d - 0.35) player.seekTo(0, false);
     } catch (e) {}
   }, 250);
 }
@@ -149,7 +154,7 @@ window.onYouTubeIframeAPIReady = function () {
         if (e.data === YT.PlayerState.PLAYING) toParent('state-playing', { muted: muted });
         // Backstop: the pre-emptive rewind should mean we never get here.
         if (e.data === YT.PlayerState.ENDED) {
-          try { player.seekTo(0, true); player.playVideo(); } catch (err) {}
+          try { player.seekTo(0, false); player.playVideo(); } catch (err) {}
         }
       },
       onError: function (e) {
