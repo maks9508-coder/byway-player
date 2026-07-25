@@ -127,7 +127,13 @@ function startArmWatch() {
 // Legal only once armed — before that, a seek would summon the chrome we hid.
 function startNow() {
   try {
-    player.seekTo(0, true);
+    // allowSeekAhead=false, for the same reason the loop uses it: a seek that
+    // asks the player to fetch puts it through a buffering state, and that is
+    // what makes YouTube repaint its header and pause button. By now the video
+    // has played its warm-up seconds, so frame 0 is already buffered and this
+    // rewind is silent. Passing true here is what put the pause button back on
+    // screen every time a card was swiped in.
+    player.seekTo(0, false);
     if (WANT_SOUND) { player.unMute(); player.setVolume(100); muted = false; }
     player.playVideo();
   } catch (e) {}
