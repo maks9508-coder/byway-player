@@ -151,7 +151,12 @@ function startNow() {
       toParent('unmute', { muted: true, err: String(e && e.message || e) });
     }
   }
-  try { player.seekTo(0, false); } catch (e) {}
+  // The rewind is opt-in now. Measured: this seek is what stops playback on
+  // iOS — after it the player sits paused behind YouTube's play button, with
+  // or without sound, one player or two. Starting a few seconds in is a much
+  // smaller price than not starting at all, and the loop brings frame 0 round
+  // soon enough anyway.
+  if (params.get('rewind') === '1') { try { player.seekTo(0, false); } catch (e) {} }
   try { if (player.getPlayerState() !== YT.PlayerState.PLAYING) player.playVideo(); } catch (e) {}
   try { startLoopWatch(); } catch (e) {}
   revealVideo();
