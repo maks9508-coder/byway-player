@@ -63,6 +63,7 @@ var muted  = true;            // the player is ALWAYS created muted
 var armed  = false;           // chrome gone; a seek is now invisible
 var startRequested = false;   // app asked to start before we were armed
 var loopTimer = null;
+var started = false;         // startNow has actually run
 
 if (VIDEO_ID) {
   // "oar" is the original-aspect thumbnail YouTube generates for non-16:9
@@ -126,29 +127,27 @@ function startArmWatch() {
 
 // Legal only once armed — before that, a seek would summon the chrome we hid.
 function startNow() {
-  try {
-    // Everything noisy already happened while this card was hidden. Measured:
-    // showing the player changes nothing on its own, but unMute() and
-    // playVideo() make YouTube repaint its header and pause button — which is
-    // why they are done during the warm-up, not here. All that is left for the
-    // visible moment is a volume change (silent, no UI) and an in-buffer
-    // rewind (proven silent by the loop).
-    player.seekTo(0, false);
-    if (WANT_SOUND) {
-      // unMute() is the ONLY way to make sound on iOS: there, HTMLMediaElement
-      // volume is read-only, so setVolume() does nothing at all. That is why
-      // the old scheme — unmute early, hold volume at 0 — played the next
-      // card's audio at full blast on the phone while looking silent in a
-      // desktop browser. Mute is the only real control, so the warm-up stays
-      // muted and sound is switched on exactly here, when the card is shown.
+  // Each step stands alone. They used to share one try/catch, so if the rewind
+  // threw — and it can, when frame 0 has fallen out of the buffer — the unmute
+  // below it never ran and the card came up playing but silent. That is exactly
+  // what the device reported: armed, playing, still muted.
+  if (WANT_SOUND) {
+    try {
+      // unMute() is the ONLY way to make sound on iOS: there,
+      // HTMLMediaElement.volume is read-only and setVolume() does nothing. So
+      // the warm-up stays muted for its whole life and sound is switched on
+      // here, at the moment the card is shown. Measured: this does not bring
+      // YouTube's chrome back — the seek did, and that one now stays in-buffer.
       player.unMute();
       player.setVolume(100);   // no-op on iOS, honoured elsewhere
       muted = false;
-    }
-    if (player.getPlayerState() !== YT.PlayerState.PLAYING) player.playVideo();
-  } catch (e) {}
-  startLoopWatch();
+    } catch (e) {}
+  }
+  try { player.seekTo(0, false); } catch (e) {}
+  try { if (player.getPlayerState() !== YT.PlayerState.PLAYING) player.playVideo(); } catch (e) {}
+  try { startLoopWatch(); } catch (e) {}
   revealVideo();
+  started = true;
   toParent('playing', { muted: muted });
 }
 
@@ -229,7 +228,14 @@ window.addEventListener('message', function (ev) {
       toParent('loaded', { videoId: id });
     } catch (e) {}
   }
-  if (d.action === 'start')  { if (armed) startNow(); else startRequested = true; }
+  if (d.action === 'start') {
+    // The app repeats this until it hears back, because a postMessage sent
+    // before this page's script ran is simply lost. Repeats are harmless:
+    // once started, we just re-confirm.
+    if (started) toParent('playing', { muted: muted });
+    else if (armed) startNow();
+    else startRequested = true;
+  }
   if (d.action === 'pause')  { try { player.pauseVideo(); } catch (e) {} }
   if (d.action === 'play')   { try { player.playVideo(); } catch (e) {} }
   if (d.action === 'mute')   { setMuted(true); }
