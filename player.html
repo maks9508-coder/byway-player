@@ -141,7 +141,15 @@ function startNow() {
       player.unMute();
       player.setVolume(100);   // no-op on iOS, honoured elsewhere
       muted = false;
-    } catch (e) {}
+      // Report what the PLAYER says, not what we intended. iOS can refuse an
+      // unmute outright — audible playback there is gated on a real user
+      // gesture, and a gesture in the parent page does not carry into a
+      // cross-origin frame. This is the only way to tell "the command never
+      // arrived" apart from "the command arrived and was ignored".
+      toParent('unmute', { muted: player.isMuted() });
+    } catch (e) {
+      toParent('unmute', { muted: true, err: String(e && e.message || e) });
+    }
   }
   try { player.seekTo(0, false); } catch (e) {}
   try { if (player.getPlayerState() !== YT.PlayerState.PLAYING) player.playVideo(); } catch (e) {}
