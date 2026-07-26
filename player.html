@@ -106,7 +106,6 @@ function startLoopWatch() {
 // is supposed to mean: "YouTube's chrome has had its four seconds and gone".
 // Accumulated, so a video shorter than the timeout still arms across loops.
 var playedMs = 0;
-var audioArmed = false;
 var armWatch = null;
 function startArmWatch() {
   if (armWatch) return;
@@ -116,21 +115,6 @@ function startArmWatch() {
     last = now;
     try {
       if (player.getPlayerState() === YT.PlayerState.PLAYING) playedMs += dt;
-      // Do the audio switch EARLY, while still hidden: unMute() summons the
-      // chrome, so it has to happen with enough warm-up left for that chrome to
-      // time out again. Volume stays at 0, so nothing is audible until the card
-      // is really on screen — the visible moment then only raises the volume.
-      if (!audioArmed && playedMs > 400) {
-        audioArmed = true;
-        // unMute() restores whatever volume the player had before it was muted
-        // — 100 — and it does so asynchronously, so a single setVolume(0)
-        // before or after it still leaks a burst of audio from a card the user
-        // is not looking at. Zero it, unmute, zero it again, and then keep
-        // re-asserting zero until this card is actually started. Silence has to
-        // be held, not set once.
-        try { player.unMute(); player.setVolume(0); } catch (err) {}
-        holdSilence();
-      }
     } catch (e) { return; }
     if (playedMs < CHROME_HIDE_MS) return;
     clearInterval(armWatch); armWatch = null;
@@ -138,20 +122,6 @@ function startArmWatch() {
     toParent('armed');
     if (startRequested) startNow();
   }, 200);
-}
-
-// Hold the warm-up silent. YouTube can restore the pre-mute volume behind our
-// back after unMute(), so zero is re-asserted on a short interval instead of
-// being set once and trusted. Stops the moment the card is really started.
-var silenceTimer = null;
-function holdSilence() {
-  if (silenceTimer) return;
-  silenceTimer = setInterval(function () {
-    try { if (player.getVolume() > 0) player.setVolume(0); } catch (e) {}
-  }, 100);
-}
-function releaseSilence() {
-  if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
 }
 
 // Legal only once armed — before that, a seek would summon the chrome we hid.
@@ -163,14 +133,16 @@ function startNow() {
     // why they are done during the warm-up, not here. All that is left for the
     // visible moment is a volume change (silent, no UI) and an in-buffer
     // rewind (proven silent by the loop).
-    releaseSilence();
     player.seekTo(0, false);
     if (WANT_SOUND) {
-      // Normally a no-op: the warm-up already unmuted at volume 0, and calling
-      // unMute() again is what used to summon the chrome. Only if something
-      // actually muted this player do we take that hit to get sound back.
-      if (player.isMuted()) player.unMute();
-      player.setVolume(100);
+      // unMute() is the ONLY way to make sound on iOS: there, HTMLMediaElement
+      // volume is read-only, so setVolume() does nothing at all. That is why
+      // the old scheme — unmute early, hold volume at 0 — played the next
+      // card's audio at full blast on the phone while looking silent in a
+      // desktop browser. Mute is the only real control, so the warm-up stays
+      // muted and sound is switched on exactly here, when the card is shown.
+      player.unMute();
+      player.setVolume(100);   // no-op on iOS, honoured elsewhere
       muted = false;
     }
     if (player.getPlayerState() !== YT.PlayerState.PLAYING) player.playVideo();
