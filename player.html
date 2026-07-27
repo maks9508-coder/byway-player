@@ -107,8 +107,9 @@ function startArmWatch() {
     if (playedMs < CHROME_HIDE_MS) return;
     clearInterval(armWatch); armWatch = null;
     armed = true;
+    // Reported for diagnostics only — nothing waits on it now that the video
+    // is shown from its first frame.
     toParent('armed');
-    if (startRequested) startNow();
   }, 200);
 }
 
@@ -187,6 +188,9 @@ window.onYouTubeIframeAPIReady = function () {
         if (window.parent === window) setTimeout(startNow, CHROME_HIDE_MS + 150);
       },
       onStateChange: function (e) {
+        // Uncover on the first frame that actually plays, so the picture and
+        // the sound begin together.
+        if (e.data === YT.PlayerState.PLAYING) revealVideo();
         if (e.data === YT.PlayerState.PLAYING) toParent('state-playing', { muted: muted });
         // No ENDED handling: the playlist loop means we should never see it,
         // and the restart that used to live here is what made the video toggle
@@ -237,12 +241,14 @@ window.addEventListener('message', function (ev) {
     } catch (e) {}
   }
   if (d.action === 'start') {
-    // The app repeats this until it hears back, because a postMessage sent
-    // before this page's script ran is simply lost. Repeats are harmless:
-    // once started, we just re-confirm.
+    // No waiting for the warm-up any more. Sound only exists on a player that
+    // was created unmuted, so audio begins the moment this page loads — and
+    // holding the picture back until YouTube's chrome timed out meant sound ran
+    // ~4s ahead of the image. Chosen trade: show the video from its first
+    // frame, in step with its sound, and let YouTube's chrome sit on top for
+    // the few seconds it takes to fade by itself.
     if (started) toParent('playing', { muted: muted });
-    else if (armed) startNow();
-    else startRequested = true;
+    else startNow();
   }
   if (d.action === 'pause')  { try { player.pauseVideo(); } catch (e) {} }
   if (d.action === 'play')   { try { player.playVideo(); } catch (e) {} }
