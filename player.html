@@ -223,7 +223,19 @@ window.onYouTubeIframeAPIReady = function () {
 // allowed to turn audio on.
 shield.addEventListener('click', function (ev) {
   ev.stopPropagation();
-  if (muted && WANT_SOUND && armed) setMuted(false);
+  // Force sound on, unconditionally. iOS can report a player as unmuted while
+  // still refusing to let any audio out, because audible playback there is
+  // gated on a real user gesture — and a tap in the host app does not carry
+  // into a cross-origin frame. THIS tap happens inside the frame, so it is the
+  // one kind of gesture that can lift that.
+  try {
+    player.unMute();
+    player.setVolume(100);
+    muted = false;
+    toParent('tap-unmute', { muted: player.isMuted() });
+  } catch (e) {
+    toParent('tap-unmute', { muted: true, err: String(e && e.message || e) });
+  }
 });
 
 window.addEventListener('message', function (ev) {
