@@ -84,20 +84,7 @@ function revealVideo() { cover.classList.add('gone'); }
 // Loop by rewinding a moment BEFORE the end, while the video is still playing.
 // Waiting for ENDED means YouTube has already put its end screen up, and
 // restarting from there both stalls and re-summons the chrome.
-function startLoopWatch() {
-  if (loopTimer) return;
-  loopTimer = setInterval(function () {
-    try {
-      var d = player.getDuration(), t = player.getCurrentTime();
-      // allowSeekAhead=false: seek only inside what is already buffered. A
-      // Short is fully buffered by the time it reaches its end, so this jumps
-      // straight to frame 0 without a new request — and without the buffering
-      // state that makes YouTube paint its chrome again. Passing true here is
-      // what made the loop point flash the header and pause button.
-      if (d > 1 && t >= d - 0.35) player.seekTo(0, false);
-    } catch (e) {}
-  }, 250);
-}
+function startLoopWatch() { /* YouTube loops natively now — see playerVars */ }
 
 // Arming must be driven by how much the video has ACTUALLY PLAYED, not by a
 // wall-clock timer. A pre-warmed card is off screen, and an off-screen iframe
@@ -181,8 +168,15 @@ window.onYouTubeIframeAPIReady = function () {
       mute: WANT_SOUND ? 0 : 1,
       playsinline: 1,      // stay inline, never iOS fullscreen
       controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
-      iv_load_policy: 3    // no annotation overlays
-      // deliberately NO loop/playlist: a playlist is what adds skip buttons
+      iv_load_policy: 3,   // no annotation overlays
+      // Loop natively. Our own loop rewound just before the end, and on iOS a
+      // seek pauses playback — the backstop then restarted it, which is the
+      // start/pause/start/pause seesaw seen at the end of every clip. A
+      // playlist of one is YouTube's own loop and never seeks. It does add
+      // prev/next buttons to the chrome, but the chrome only shows during the
+      // warm-up, which is behind the still frame anyway.
+      loop: 1,
+      playlist: VIDEO_ID
     },
     events: {
       onReady: function (e) {
@@ -194,10 +188,9 @@ window.onYouTubeIframeAPIReady = function () {
       },
       onStateChange: function (e) {
         if (e.data === YT.PlayerState.PLAYING) toParent('state-playing', { muted: muted });
-        // Backstop: the pre-emptive rewind should mean we never get here.
-        if (e.data === YT.PlayerState.ENDED) {
-          try { player.seekTo(0, false); player.playVideo(); } catch (err) {}
-        }
+        // No ENDED handling: the playlist loop means we should never see it,
+        // and the restart that used to live here is what made the video toggle
+        // between playing and paused forever.
       },
       onError: function (e) {
         revealVideo();
