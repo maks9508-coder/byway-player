@@ -131,26 +131,9 @@ function startNow() {
   // threw — and it can, when frame 0 has fallen out of the buffer — the unmute
   // below it never ran and the card came up playing but silent. That is exactly
   // what the device reported: armed, playing, still muted.
-  if (WANT_SOUND) {
-    try {
-      // unMute() is the ONLY way to make sound on iOS: there,
-      // HTMLMediaElement.volume is read-only and setVolume() does nothing. So
-      // the warm-up stays muted for its whole life and sound is switched on
-      // here, at the moment the card is shown. Measured: this does not bring
-      // YouTube's chrome back — the seek did, and that one now stays in-buffer.
-      player.unMute();
-      player.setVolume(100);   // no-op on iOS, honoured elsewhere
-      muted = false;
-      // Report what the PLAYER says, not what we intended. iOS can refuse an
-      // unmute outright — audible playback there is gated on a real user
-      // gesture, and a gesture in the parent page does not carry into a
-      // cross-origin frame. This is the only way to tell "the command never
-      // arrived" apart from "the command arrived and was ignored".
-      toParent('unmute', { muted: player.isMuted() });
-    } catch (e) {
-      toParent('unmute', { muted: true, err: String(e && e.message || e) });
-    }
-  }
+  // Nothing to switch on here: sound was decided when the player was created.
+  // unMute() is refused by iOS in a cross-origin frame and takes playback down
+  // with it, so it is never called.
   // The rewind is opt-in now. Measured: this seek is what stops playback on
   // iOS — after it the player sits paused behind YouTube's play button, with
   // or without sound, one player or two. Starting a few seconds in is a much
@@ -188,7 +171,14 @@ window.onYouTubeIframeAPIReady = function () {
       // before any call of ours can land — which is exactly how a pre-warmed
       // card was audible over the card being watched. Sound is turned on in
       // startNow(), never here.
-      mute: 1,
+      // Born with sound, not switched to it later. Measured on device: iOS
+      // REFUSES unMute() inside a cross-origin frame — the player answers
+      // isMuted() === true right after the call, and even a tap inside the
+      // frame does not lift it. But a player CREATED unmuted plays audibly,
+      // because the host WebView sets mediaTypesRequiringUserActionForPlayback
+      // to "none". Sound is therefore a property of creation, and the only way
+      // to have a silent player is to create it muted and leave it that way.
+      mute: WANT_SOUND ? 0 : 1,
       playsinline: 1,      // stay inline, never iOS fullscreen
       controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
       iv_load_policy: 3    // no annotation overlays
